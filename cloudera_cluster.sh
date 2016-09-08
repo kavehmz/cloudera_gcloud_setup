@@ -62,7 +62,7 @@ ssh kaveh@$MANAGERIP 'sudo sudo -su postgres psql sample_usda < /tmp/usda-r18-1.
 echo "Creating some table to e used during cluster setup later. This are emtpy."
 ssh kaveh@$MANAGERIP 'sudo sudo -su postgres psql -c "CREATE database hive"'
 ssh kaveh@$MANAGERIP 'sudo sudo -su postgres psql -c "CREATE database hue"'
-ssh kaveh@$MANAGERIP 'sudo sudo -su postgres psql -c "CREATE database report"'
+ssh kaveh@$MANAGERIP 'sudo sudo -su postgres psql -c "CREATE database reports"'
 ssh kaveh@$MANAGERIP 'sudo sudo -su postgres psql -c "CREATE database activities"'
 ssh kaveh@$MANAGERIP 'sudo sudo -su postgres psql -c "CREATE database oozie"'
 ssh kaveh@$MANAGERIP 'sudo sudo -su postgres psql -c "CREATE database sentry"'
