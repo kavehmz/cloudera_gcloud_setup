@@ -2,25 +2,32 @@
 echo "Checking gcloud command and if it is setup correcting by issuing 'gcloud info'"
 gcloud info >/dev/null || { echo "You need to install Google Cloud SDK and set it up first"; exit 1; }
 
-GCLOUD_ZONE='us-central1-a'
+GCLOUD_ZONE='europe-west1-b'
+NODES=3
 
-echo "Creating the nodes in zone [$GCLOUD_ZONE]"
-for NODENAME in cloudera-manager cloudera-node01 cloudera-node02 cloudera-node03;do echo $GCLOUD_ZONE-$NODENAME;gcloud compute instances create "$GCLOUD_ZONE-$NODENAME" --zone "$GCLOUD_ZONE" --machine-type "n1-highmem-2" --image "/ubuntu-os-cloud/ubuntu-1404-trusty-v20160809a" --boot-disk-size "200";done
-
-echo "Getting public IPs to setup nodes"
+echo "Creating the manager in zone [$GCLOUD_ZONE]"
+NODENAME=cloudera-manager
+echo $GCLOUD_ZONE-$NODENAME
+gcloud compute instances create "$GCLOUD_ZONE-$NODENAME" \
+	--zone "$GCLOUD_ZONE" --machine-type "n1-highmem-2" \
+	--image "/ubuntu-os-cloud/ubuntu-1404-trusty-v20160809a" \
+	--boot-disk-size "200"
 MANAGERIP=$(gcloud compute instances describe $GCLOUD_ZONE-cloudera-manager --zone $GCLOUD_ZONE|grep natIP|cut -d' ' -f 6)
-NODE01IP=$(gcloud compute instances describe $GCLOUD_ZONE-cloudera-node01 --zone $GCLOUD_ZONE|grep natIP|cut -d' ' -f 6)
-NODE02IP=$(gcloud compute instances describe $GCLOUD_ZONE-cloudera-node02 --zone $GCLOUD_ZONE|grep natIP|cut -d' ' -f 6)
-NODE03IP=$(gcloud compute instances describe $GCLOUD_ZONE-cloudera-node03 --zone $GCLOUD_ZONE|grep natIP|cut -d' ' -f 6)
-
-echo "Getting private IPs for use cloudera cluster setup"
 LOCALMANAGERIP=$(gcloud compute instances describe $GCLOUD_ZONE-cloudera-manager --zone $GCLOUD_ZONE|grep networkIP|cut -d' ' -f 4)
-LOCALNODE01IP=$(gcloud compute instances describe $GCLOUD_ZONE-cloudera-node01 --zone $GCLOUD_ZONE|grep networkIP|cut -d' ' -f 4)
-LOCALNODE02IP=$(gcloud compute instances describe $GCLOUD_ZONE-cloudera-node02 --zone $GCLOUD_ZONE|grep networkIP|cut -d' ' -f 4)
-LOCALNODE03IP=$(gcloud compute instances describe $GCLOUD_ZONE-cloudera-node03 --zone $GCLOUD_ZONE|grep networkIP|cut -d' ' -f 4)
 
+echo "Creating nodes in zone [$GCLOUD_ZONE]"
+for i in $(seq 1 $NODES)
+do
+	NODENAME=cloudera-node$i
+	echo $GCLOUD_ZONE-$NODENAME
+	gcloud compute instances create "$GCLOUD_ZONE-$NODENAME" \
+		--zone "$GCLOUD_ZONE" --machine-type "n1-highmem-2" \
+		--image "/ubuntu-os-cloud/ubuntu-1404-trusty-v20160809a" \
+		--boot-disk-size "200"
+	export NODEIP$i=$(gcloud compute instances describe $GCLOUD_ZONE-cloudera-node$i --zone $GCLOUD_ZONE|grep natIP|cut -d' ' -f 6)
+	export LOCALNODEIP$i=$(gcloud compute instances describe $GCLOUD_ZONE-cloudera-node$i --zone $GCLOUD_ZONE|grep networkIP|cut -d' ' -f 4)
+done
 
-[Manager]
 echo "Adding cloudera repositories for apt"
 ssh kaveh@$MANAGERIP "sudo bash -c '" 'echo "deb [arch=amd64] http://archive.cloudera.com/cm5/ubuntu/trusty/amd64/cm trusty-cm5 contrib" > /etc/apt/sources.list.d/cloud.list'"'"
 ssh kaveh@$MANAGERIP "sudo bash -c '" 'echo "deb-src http://archive.cloudera.com/cm5/ubuntu/trusty/amd64/cm trusty-cm5 contrib" >> /etc/apt/sources.list.d/cloud.list'"'"
@@ -83,18 +90,24 @@ chmod 400 ~/.ssh/cloudera
 
 PUBKEY=$(ssh kaveh@$MANAGERIP 'cat ~/.ssh/id_rsa.pub')
 
-for IP in $NODE01IP $NODE02IP $NODE03IP;do echo $IP;ssh kaveh@$IP "echo '$PUBKEY' >> ~/.ssh/authorized_keys";done
-
-for IP in $NODE01IP $NODE02IP $NODE03IP;do echo $IP;ssh kaveh@$IP "sudo bash -c 'echo 10  > /proc/sys/vm/swappiness'";done
-for IP in $NODE01IP $NODE02IP $NODE03IP;do echo $IP;ssh kaveh@$IP "sudo bash -c 'echo vm.swappiness=10 >> /etc/sysctl.conf'";done
-
-
-for NAME in NODE01IP NODE02IP NODE03IP
+echo "Set authorized_keys/swappiness"
+for i in $(seq 1 $NODES)
 do
+	NAME=NODEIP$i;
+	IP="${!NAME}";
+	echo $IP;
+	ssh kaveh@$IP "echo '$PUBKEY' >> ~/.ssh/authorized_keys"
+	ssh kaveh@$IP "sudo bash -c 'echo 10  > /proc/sys/vm/swappiness'"
+	ssh kaveh@$IP "sudo bash -c 'echo vm.swappiness=10 >> /etc/sysctl.conf'"
+done
+
+for i in $(seq 1 $NODES)
+do
+	NAME=NODEIP$i
 	LNAME=LOCAL$NAME
 	LOCALIP="${!LNAME}"
-	echo $LOCALIP
 	IP="${!NAME}"
+	echo "$IP/$LOCALIP"
 
 	RDNS=$(ssh kaveh@$MANAGERIP "host $LOCALIP" |perl -e '$a=<>; $a =~ /pointer (.*)\.$/;print $1,"\n"')
 	echo $RDNS
@@ -104,12 +117,16 @@ do
 done
 
 echo "Enabling Zram to give the servers a bit more memory"
-for IP in $MANAGERIP $NODE01IP $NODE02IP $NODE03IP;do echo $IP;ssh kaveh@$IP 'sudo apt-get install -y zram-config';done
+ssh kaveh@$MANAGERIP 'sudo apt-get install -y zram-config'
+for i in $(seq 1 $NODES);do NAME=NODEIP$i;IP="${!NAME}";ssh kaveh@$IP 'sudo apt-get install -y zram-config';done
 
-each "Starting Cloudera Manager Server"
+echo "Starting Cloudera Manager Server"
 ssh kaveh@$MANAGERIP 'sudo service cloudera-scm-server start'
 
 echo "Wait for few minutes and then opne NOW OPEN http://$MANAGERIP:7180/"
 echo "Use and passwords are: admin/admin"
 echo "Add the following IPs as extra nodes"
-for IP in $LOCALNODE01IP $LOCALNODE02IP $LOCALNODE03IP;do echo $IP;done
+for i in $(seq 1 $NODES);do NAME=LOCALNODEIP$i;IP="${!NAME}";echo $IP;done
+
+echo "DB set is as [$LOCALMANAGERIP cdadmin/letmein]. DB names are lower case of the service name."
+
